@@ -158,6 +158,15 @@ namespace Photo_zip.Services
         public double PageHeightPoints { get; set; }
     }
 
+    internal sealed class ProcessingImageSnapshot
+    {
+        public ImageItem Item { get; set; }
+        public string FilePath { get; set; }
+        public string FileName { get; set; }
+        public IReadOnlyList<RedactionOperation> Redactions { get; set; } = Array.Empty<RedactionOperation>();
+        public IReadOnlyList<SignatureOverlay> Signatures { get; set; } = Array.Empty<SignatureOverlay>();
+    }
+
     /// <summary>
     /// 集中处理图片识别、预览压缩和批量输出。界面层只负责收集参数与展示状态。
     /// </summary>
@@ -236,7 +245,7 @@ namespace Photo_zip.Services
             return Task.Run(() =>
             {
                 cancellationToken.ThrowIfCancellationRequested();
-                using (var stream = EncodeToMemory(item, options, preview: true))
+                using (var stream = EncodeToMemory(item, options, preview: true, cancellationToken))
                 {
                     item.PreviewSize = stream.Length;
                     stream.Position = 0;
@@ -295,18 +304,19 @@ namespace Photo_zip.Services
         {
             return Task.Run(() =>
             {
-                var list = items?.Where(x => x.IsSelected).ToList() ?? new List<ImageItem>();
+                var list = CreateSelectedSnapshots(items);
                 var total = list.Count;
                 var completed = 0;
 
-                foreach (var item in list)
+                foreach (var snapshot in list)
                 {
                     cancellationToken.ThrowIfCancellationRequested();
+                    var item = snapshot.Item;
                     progress?.Report(new ProcessingProgress
                     {
                         Completed = completed,
                         Total = total,
-                        CurrentFileName = item.FileName,
+                        CurrentFileName = snapshot.FileName,
                         Message = "正在处理"
                     });
 
@@ -320,15 +330,19 @@ namespace Photo_zip.Services
                         else
                         {
                             Directory.CreateDirectory(Path.GetDirectoryName(outputPath));
-                            using (var image = LoadOrientedImage(item.FilePath))
+                            using (var image = LoadOrientedImage(snapshot.FilePath))
                             {
-                                ApplyTransforms(image, options, item.GetRedactionSnapshot(), item.GetSignatureSnapshot());
-                                SaveImage(image, outputPath, ResolveOutputFormat(item, options), options);
+                                ApplyTransforms(image, options, snapshot.Redactions, snapshot.Signatures);
+                                SaveImage(image, outputPath, ResolveOutputFormat(item, options), options, cancellationToken);
                             }
 
                             item.OutputPath = outputPath;
                             item.Status = "完成";
                         }
+                    }
+                    catch (OperationCanceledException)
+                    {
+                        throw;
                     }
                     catch (Exception ex)
                     {
@@ -340,7 +354,7 @@ namespace Photo_zip.Services
                     {
                         Completed = completed,
                         Total = total,
-                        CurrentFileName = item.FileName,
+                        CurrentFileName = snapshot.FileName,
                         Message = "已完成"
                     });
                 }
@@ -354,7 +368,7 @@ namespace Photo_zip.Services
                 ValidateOptions(options);
                 ValidateStitchOptions(stitchOptions);
 
-                var list = items?.Where(x => x.IsSelected).ToList() ?? new List<ImageItem>();
+                var list = CreateSelectedSnapshots(items);
                 if (list.Count < 2)
                 {
                     throw new InvalidOperationException("请至少选择 2 张图片进行合并/拼接。");
@@ -366,17 +380,17 @@ namespace Photo_zip.Services
                     for (var i = 0; i < list.Count; i++)
                     {
                         cancellationToken.ThrowIfCancellationRequested();
-                        var item = list[i];
+                        var snapshot = list[i];
                         progress?.Report(new ProcessingProgress
                         {
                             Completed = i,
                             Total = list.Count + 1,
-                            CurrentFileName = item.FileName,
+                            CurrentFileName = snapshot.FileName,
                             Message = "正在准备拼接"
                         });
 
-                        var image = LoadOrientedImage(item.FilePath);
-                        ApplyTransforms(image, options, item.GetRedactionSnapshot(), item.GetSignatureSnapshot());
+                        var image = LoadOrientedImage(snapshot.FilePath);
+                        ApplyTransforms(image, options, snapshot.Redactions, snapshot.Signatures);
                         loadedImages.Add(image);
                     }
 
@@ -390,18 +404,18 @@ namespace Photo_zip.Services
                     });
 
                     var outputFormat = ResolveOutputFormatForStitch(options);
-                    var outputPath = BuildStitchOutputPath(list[0], options, outputFormat);
+                    var outputPath = BuildStitchOutputPath(list[0].Item, options, outputFormat);
                     Directory.CreateDirectory(Path.GetDirectoryName(outputPath));
 
                     using (var stitched = CreateStitchedImage(loadedImages, stitchOptions))
                     {
-                        SaveImage(stitched, outputPath, outputFormat, options);
+                        SaveImage(stitched, outputPath, outputFormat, options, cancellationToken);
                     }
 
-                    foreach (var item in list)
+                    foreach (var snapshot in list)
                     {
-                        item.OutputPath = outputPath;
-                        item.Status = "已拼接";
+                        snapshot.Item.OutputPath = outputPath;
+                        snapshot.Item.Status = "已拼接";
                     }
 
                     progress?.Report(new ProcessingProgress
@@ -431,7 +445,7 @@ namespace Photo_zip.Services
                 ValidateOptions(options);
                 ValidatePdfOptions(pdfOptions);
 
-                var list = items?.ToList() ?? new List<ImageItem>();
+                var list = CreateSnapshots(items);
                 if (!list.Any())
                 {
                     throw new InvalidOperationException("请先导入需要导出 PDF 的图片。");
@@ -506,14 +520,14 @@ namespace Photo_zip.Services
             options.PageDpi = Math.Max(72, Math.Min(1200, options.PageDpi));
         }
 
-        private IReadOnlyList<string> ExportMergedPdf(IReadOnlyList<ImageItem> list, ProcessingOptions options, PdfExportOptions pdfOptions, IProgress<ProcessingProgress> progress, CancellationToken cancellationToken)
+        private IReadOnlyList<string> ExportMergedPdf(IReadOnlyList<ProcessingImageSnapshot> list, ProcessingOptions options, PdfExportOptions pdfOptions, IProgress<ProcessingProgress> progress, CancellationToken cancellationToken)
         {
-            var outputPath = BuildPdfOutputPath(list[0], options, "archive");
+            var outputPath = BuildPdfOutputPath(list[0].Item, options, "archive");
             if (string.IsNullOrWhiteSpace(outputPath))
             {
-                foreach (var item in list)
+                foreach (var snapshot in list)
                 {
-                    item.Status = "已跳过";
+                    snapshot.Item.Status = "已跳过";
                 }
 
                 return new List<string>();
@@ -524,24 +538,24 @@ namespace Photo_zip.Services
             WritePdf(outputPath, list.Count, index =>
             {
                 cancellationToken.ThrowIfCancellationRequested();
-                var item = list[index];
+                var snapshot = list[index];
                 progress?.Report(new ProcessingProgress
                 {
                     Completed = index,
                     Total = list.Count + 1,
-                    CurrentFileName = item.FileName,
+                    CurrentFileName = snapshot.FileName,
                     Message = "正在写入 PDF 页面"
                 });
 
-                var page = CreatePdfPageImage(item, options, pdfOptions);
-                item.Status = "已加入 PDF";
+                var page = CreatePdfPageImage(snapshot, options, pdfOptions);
+                snapshot.Item.Status = "已加入 PDF";
                 return page;
             });
 
-            foreach (var item in list)
+            foreach (var snapshot in list)
             {
-                item.OutputPath = outputPath;
-                item.Status = "PDF 完成";
+                snapshot.Item.OutputPath = outputPath;
+                snapshot.Item.Status = "PDF 完成";
             }
 
             progress?.Report(new ProcessingProgress
@@ -555,25 +569,26 @@ namespace Photo_zip.Services
             return new[] { outputPath };
         }
 
-        private IReadOnlyList<string> ExportSeparatePdfs(IReadOnlyList<ImageItem> list, ProcessingOptions options, PdfExportOptions pdfOptions, IProgress<ProcessingProgress> progress, CancellationToken cancellationToken)
+        private IReadOnlyList<string> ExportSeparatePdfs(IReadOnlyList<ProcessingImageSnapshot> list, ProcessingOptions options, PdfExportOptions pdfOptions, IProgress<ProcessingProgress> progress, CancellationToken cancellationToken)
         {
             var outputPaths = new List<string>();
 
             for (var i = 0; i < list.Count; i++)
             {
                 cancellationToken.ThrowIfCancellationRequested();
-                var item = list[i];
+                var snapshot = list[i];
+                var item = snapshot.Item;
                 progress?.Report(new ProcessingProgress
                 {
                     Completed = i,
                     Total = list.Count,
-                    CurrentFileName = item.FileName,
+                    CurrentFileName = snapshot.FileName,
                     Message = "正在导出 PDF"
                 });
 
                 try
                 {
-                    var outputPath = BuildPdfOutputPath(item, options, Path.GetFileNameWithoutExtension(item.FileName));
+                    var outputPath = BuildPdfOutputPath(item, options, Path.GetFileNameWithoutExtension(snapshot.FileName));
                     if (string.IsNullOrWhiteSpace(outputPath))
                     {
                         item.Status = "已跳过";
@@ -581,12 +596,16 @@ namespace Photo_zip.Services
                     else
                     {
                         Directory.CreateDirectory(Path.GetDirectoryName(outputPath));
-                        var page = CreatePdfPageImage(item, options, pdfOptions);
+                        var page = CreatePdfPageImage(snapshot, options, pdfOptions);
                         WritePdf(outputPath, new[] { page });
                         item.OutputPath = outputPath;
                         item.Status = "PDF 完成";
                         outputPaths.Add(outputPath);
                     }
+                }
+                catch (OperationCanceledException)
+                {
+                    throw;
                 }
                 catch (Exception ex)
                 {
@@ -597,7 +616,7 @@ namespace Photo_zip.Services
                 {
                     Completed = i + 1,
                     Total = list.Count,
-                    CurrentFileName = item.FileName,
+                    CurrentFileName = snapshot.FileName,
                     Message = "PDF 导出完成"
                 });
             }
@@ -605,11 +624,11 @@ namespace Photo_zip.Services
             return outputPaths;
         }
 
-        private PdfPageImage CreatePdfPageImage(ImageItem item, ProcessingOptions options, PdfExportOptions pdfOptions)
+        private PdfPageImage CreatePdfPageImage(ProcessingImageSnapshot snapshot, ProcessingOptions options, PdfExportOptions pdfOptions)
         {
-            using (var image = LoadOrientedImage(item.FilePath))
+            using (var image = LoadOrientedImage(snapshot.FilePath))
             {
-                ApplyTransforms(image, options, item.GetRedactionSnapshot(), item.GetSignatureSnapshot());
+                ApplyTransforms(image, options, snapshot.Redactions, snapshot.Signatures);
                 FlattenForPdf(image);
 
                 using (var stream = new MemoryStream())
@@ -628,10 +647,11 @@ namespace Photo_zip.Services
             }
         }
 
-        private MemoryStream EncodeToMemory(ImageItem item, ProcessingOptions options, bool preview)
+        private MemoryStream EncodeToMemory(ImageItem item, ProcessingOptions options, bool preview, CancellationToken cancellationToken)
         {
             using (var image = LoadOrientedImage(item.FilePath))
             {
+                cancellationToken.ThrowIfCancellationRequested();
                 ApplyTransforms(image, options, item.GetRedactionSnapshot(), item.GetSignatureSnapshot());
 
                 if (preview)
@@ -640,10 +660,30 @@ namespace Photo_zip.Services
                 }
 
                 var format = ResolveOutputFormat(item, options);
-                var stream = SaveImageToMemory(image, format, options);
+                var stream = SaveImageToMemory(image, format, options, cancellationToken);
                 stream.Position = 0;
                 return stream;
             }
+        }
+
+        private static List<ProcessingImageSnapshot> CreateSelectedSnapshots(IEnumerable<ImageItem> items)
+        {
+            return CreateSnapshots(items?.Where(x => x.IsSelected));
+        }
+
+        private static List<ProcessingImageSnapshot> CreateSnapshots(IEnumerable<ImageItem> items)
+        {
+            return items?
+                .Where(item => item != null)
+                .Select(item => new ProcessingImageSnapshot
+                {
+                    Item = item,
+                    FilePath = item.FilePath,
+                    FileName = item.FileName,
+                    Redactions = item.GetRedactionSnapshot(),
+                    Signatures = item.GetSignatureSnapshot()
+                })
+                .ToList() ?? new List<ProcessingImageSnapshot>();
         }
 
         private string BuildOutputPath(ImageItem item, ProcessingOptions options)
@@ -655,6 +695,11 @@ namespace Photo_zip.Services
             var extension = GetExtension(outputFormat);
             var name = Path.GetFileNameWithoutExtension(item.FileName) + extension;
             var candidate = Path.Combine(outputDirectory, name);
+
+            if (options.ConflictStrategy == ConflictStrategy.Overwrite && IsSamePath(candidate, item.FilePath))
+            {
+                return CreateRenamedPath(outputDirectory, Path.GetFileNameWithoutExtension(item.FileName), extension);
+            }
 
             if (!File.Exists(candidate))
             {
@@ -671,16 +716,7 @@ namespace Photo_zip.Services
                 return candidate;
             }
 
-            var index = 1;
-            string renamed;
-            do
-            {
-                renamed = Path.Combine(outputDirectory, $"{Path.GetFileNameWithoutExtension(item.FileName)} ({index}){extension}");
-                index++;
-            }
-            while (File.Exists(renamed));
-
-            return renamed;
+            return CreateRenamedPath(outputDirectory, Path.GetFileNameWithoutExtension(item.FileName), extension);
         }
 
         private string BuildStitchOutputPath(ImageItem firstItem, ProcessingOptions options, OutputFormat outputFormat)
@@ -706,16 +742,35 @@ namespace Photo_zip.Services
                 return candidate;
             }
 
+            return CreateRenamedPath(outputDirectory, "stitched", extension);
+        }
+
+        private static string CreateRenamedPath(string outputDirectory, string baseName, string extension)
+        {
+            var safeBaseName = string.IsNullOrWhiteSpace(baseName) ? "output" : baseName;
             var index = 1;
             string renamed;
             do
             {
-                renamed = Path.Combine(outputDirectory, $"stitched ({index}){extension}");
+                renamed = Path.Combine(outputDirectory, $"{safeBaseName} ({index}){extension}");
                 index++;
             }
             while (File.Exists(renamed));
 
             return renamed;
+        }
+
+        private static bool IsSamePath(string firstPath, string secondPath)
+        {
+            if (string.IsNullOrWhiteSpace(firstPath) || string.IsNullOrWhiteSpace(secondPath))
+            {
+                return false;
+            }
+
+            return string.Equals(
+                Path.GetFullPath(firstPath).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar),
+                Path.GetFullPath(secondPath).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar),
+                StringComparison.OrdinalIgnoreCase);
         }
 
         private string BuildPdfOutputPath(ImageItem item, ProcessingOptions options, string baseName)
@@ -1299,7 +1354,7 @@ namespace Photo_zip.Services
 
             var canvasHeight = Math.Max(1, columnHeights.Max() - spacing + padding);
             var canvas = CreateCollageCanvas(canvasWidth, canvasHeight, options);
-            DrawPlacements(canvas, placements, CollageFitMode.Cover);
+            DrawPlacements(canvas, placements, options.FitMode);
             return canvas;
         }
 
@@ -1783,30 +1838,33 @@ namespace Photo_zip.Services
             }
         }
 
-        private MemoryStream SaveImageToMemory(Image<Rgba32> image, OutputFormat format, ProcessingOptions options)
+        private MemoryStream SaveImageToMemory(Image<Rgba32> image, OutputFormat format, ProcessingOptions options, CancellationToken cancellationToken)
         {
+            cancellationToken.ThrowIfCancellationRequested();
             if (options.TargetSizeEnabled && IsQualityAdjustableFormat(format))
             {
-                return EncodeToTargetSize(image, format, options);
+                return EncodeToTargetSize(image, format, options, cancellationToken);
             }
 
             var stream = new MemoryStream();
             image.Save(stream, CreateEncoder(format, options));
+            cancellationToken.ThrowIfCancellationRequested();
             stream.Position = 0;
             return stream;
         }
 
-        private void SaveImage(Image<Rgba32> image, string outputPath, OutputFormat format, ProcessingOptions options)
+        private void SaveImage(Image<Rgba32> image, string outputPath, OutputFormat format, ProcessingOptions options, CancellationToken cancellationToken)
         {
-            using (var stream = SaveImageToMemory(image, format, options))
+            using (var stream = SaveImageToMemory(image, format, options, cancellationToken))
             using (var fileStream = File.Create(outputPath))
             {
+                cancellationToken.ThrowIfCancellationRequested();
                 stream.Position = 0;
                 stream.CopyTo(fileStream);
             }
         }
 
-        private MemoryStream EncodeToTargetSize(Image<Rgba32> image, OutputFormat format, ProcessingOptions options)
+        private MemoryStream EncodeToTargetSize(Image<Rgba32> image, OutputFormat format, ProcessingOptions options, CancellationToken cancellationToken)
         {
             var targetBytes = Math.Max(10 * 1024, options.TargetSizeBytes);
             var bestUnderTarget = default(byte[]);
@@ -1817,8 +1875,10 @@ namespace Photo_zip.Services
 
             for (var attempt = 0; attempt < 8 && low <= high; attempt++)
             {
+                cancellationToken.ThrowIfCancellationRequested();
                 var quality = (low + high) / 2;
                 var bytes = EncodeToBytes(image, format, options, quality);
+                cancellationToken.ThrowIfCancellationRequested();
                 if (bytes.LongLength < smallestLength)
                 {
                     smallestLength = bytes.LongLength;
@@ -1836,6 +1896,7 @@ namespace Photo_zip.Services
                 }
             }
 
+            cancellationToken.ThrowIfCancellationRequested();
             var result = bestUnderTarget ?? smallestBytes ?? EncodeToBytes(image, format, options, 1);
             return new MemoryStream(result, writable: false);
         }

@@ -1764,7 +1764,9 @@ namespace Photo_zip
             var image = SelectedImage;
             if (image == null)
             {
+                _previewCancellationTokenSource?.Cancel();
                 EditedPreview = null;
+                IsPreviewBusy = false;
                 return;
             }
 
@@ -1808,10 +1810,12 @@ namespace Photo_zip
             }
             finally
             {
-                if (!token.IsCancellationRequested && requestVersion == _previewRequestVersion)
+                if (ReferenceEquals(_previewCancellationTokenSource, cancellationSource))
                 {
                     IsPreviewBusy = false;
                 }
+
+                cancellationSource.Dispose();
             }
         }
 

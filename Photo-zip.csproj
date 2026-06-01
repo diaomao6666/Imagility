@@ -23,9 +23,6 @@
   </ItemGroup>
 
   <ItemGroup>
-    <Compile Remove="Form1.cs" />
-    <Compile Remove="Form1.Designer.cs" />
-    <Compile Remove="Program.cs" />
     <None Include="App.config" />
   </ItemGroup>
 </Project>
