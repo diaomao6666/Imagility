@@ -1,0 +1,115 @@
+<Window x:Class="Photo_zip.SignatureWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="新建签名"
+        Width="720"
+        Height="480"
+        MinWidth="560"
+        MinHeight="380"
+        WindowStartupLocation="CenterOwner"
+        Background="{StaticResource AppBackgroundBrush}">
+    <Grid Margin="16">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="*" />
+            <RowDefinition Height="Auto" />
+        </Grid.RowDefinitions>
+
+        <DockPanel Grid.Row="0" Margin="0,0,0,12">
+            <TextBlock Text="手写签名"
+                       FontSize="22"
+                       FontWeight="Bold"
+                       Foreground="#0F172A"
+                       VerticalAlignment="Center" />
+            <TextBlock Text="在画布中按住鼠标或触摸绘制，保存为透明 PNG"
+                       Foreground="{StaticResource MutedTextBrush}"
+                       VerticalAlignment="Center"
+                       Margin="16,4,0,0" />
+        </DockPanel>
+
+        <Border Grid.Row="1"
+                Background="White"
+                BorderBrush="{StaticResource BorderBrushSoft}"
+                BorderThickness="1"
+                CornerRadius="16"
+                Padding="12">
+            <Grid>
+                <Border Background="#F8FAFC"
+                        BorderBrush="#CBD5E1"
+                        BorderThickness="1"
+                        CornerRadius="12" />
+                <Canvas x:Name="SignatureCanvas"
+                        Background="Transparent"
+                        ClipToBounds="True"
+                        MouseLeftButtonDown="SignatureCanvas_MouseLeftButtonDown"
+                        MouseMove="SignatureCanvas_MouseMove"
+                        MouseLeftButtonUp="SignatureCanvas_MouseLeftButtonUp"
+                        TouchDown="SignatureCanvas_TouchDown"
+                        TouchMove="SignatureCanvas_TouchMove"
+                        TouchUp="SignatureCanvas_TouchUp" />
+                <TextBlock x:Name="SignatureHintText"
+                           Text="在此处签名"
+                           IsHitTestVisible="False"
+                           HorizontalAlignment="Center"
+                           VerticalAlignment="Center"
+                           Foreground="#CBD5E1"
+                           FontSize="28"
+                           FontWeight="SemiBold" />
+            </Grid>
+        </Border>
+
+        <Grid Grid.Row="2" Margin="0,14,0,0">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="*" />
+                <ColumnDefinition Width="Auto" />
+            </Grid.ColumnDefinitions>
+
+            <DockPanel Grid.Column="0" LastChildFill="True" MaxWidth="380" HorizontalAlignment="Left">
+                <TextBlock Text="笔刷粗细"
+                           DockPanel.Dock="Left"
+                           VerticalAlignment="Center"
+                           FontWeight="SemiBold"
+                           Foreground="#0F172A"
+                           Margin="0,0,12,0" />
+                <TextBlock x:Name="BrushSizeText"
+                           Text="4px"
+                           DockPanel.Dock="Right"
+                           VerticalAlignment="Center"
+                           Foreground="{StaticResource PrimaryDarkBrush}"
+                           FontWeight="Bold"
+                           MinWidth="38"
+                           TextAlignment="Right"
+                           Margin="12,0,0,0" />
+                <Button Content="+"
+                        DockPanel.Dock="Right"
+                        Style="{StaticResource SecondaryButtonStyle}"
+                        Click="IncreaseBrushSize_Click"
+                        MinWidth="30"
+                        Padding="8,4"
+                        Margin="8,0,0,0" />
+                <Button Content="-"
+                        DockPanel.Dock="Right"
+                        Style="{StaticResource SecondaryButtonStyle}"
+                        Click="DecreaseBrushSize_Click"
+                        MinWidth="30"
+                        Padding="8,4"
+                        Margin="8,0,0,0" />
+                <Slider x:Name="BrushSizeSlider"
+                        Minimum="2"
+                        Maximum="10"
+                        TickFrequency="1"
+                        IsSnapToTickEnabled="True"
+                        IsMoveToPointEnabled="True"
+                        Value="4"
+                        ValueChanged="BrushSizeSlider_ValueChanged" />
+            </DockPanel>
+
+            <WrapPanel Grid.Column="1" HorizontalAlignment="Right">
+                <Button Content="撤销最后一笔" Style="{StaticResource SecondaryButtonStyle}" Click="Undo_Click" Margin="0,0,8,0" />
+                <Button Content="清空画布" Style="{StaticResource SecondaryButtonStyle}" Click="Clear_Click" Margin="0,0,8,0" />
+                <Button Content="保存签名" Click="Save_Click" Margin="0,0,8,0" />
+                <Button Content="取消" Style="{StaticResource SecondaryButtonStyle}" Click="Cancel_Click" />
+            </WrapPanel>
+        </Grid>
+    </Grid>
+</Window>
