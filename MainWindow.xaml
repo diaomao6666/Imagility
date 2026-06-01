@@ -318,7 +318,7 @@
                                     <CheckBox Content="按目标大小压缩" IsChecked="{Binding TargetSizeEnabled, Mode=TwoWay}" />
                                     <StackPanel IsEnabled="{Binding TargetSizeEnabled}" Margin="0,8,0,12">
                                         <TextBlock Text="目标大小（KB）" FontWeight="SemiBold" />
-                                        <TextBox Text="{Binding TargetSizeKb, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged, StringFormat={}{0:0.##}}" Margin="0,8,0,6" />
+                                        <TextBox Text="{Binding TargetSizeKb, Mode=TwoWay, UpdateSourceTrigger=LostFocus, StringFormat={}{0:0.##}}" Margin="0,8,0,6" />
                                         <TextBlock Text="开启后会自动试探压缩质量；非 JPEG/WebP 输出会自动转为 JPEG，透明背景会转为 WebP。此设置作用于图片导出和拼接输出，PDF 仍按压缩质量生成。" TextWrapping="Wrap" Foreground="{StaticResource MutedTextBrush}" />
                                     </StackPanel>
 
