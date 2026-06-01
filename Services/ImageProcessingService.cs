@@ -99,6 +99,8 @@ namespace Photo_zip.Services
         public OutputFormat OutputFormat { get; set; } = OutputFormat.KeepOriginal;
         public CompressionMode CompressionMode { get; set; } = CompressionMode.Lossy;
         public int Quality { get; set; } = 80;
+        public bool TargetSizeEnabled { get; set; }
+        public long TargetSizeBytes { get; set; } = 512 * 1024;
         public bool QuantizePng { get; set; }
         public int PngColorCount { get; set; } = 256;
         public string OutputDirectory { get; set; }
@@ -321,8 +323,7 @@ namespace Photo_zip.Services
                             using (var image = LoadOrientedImage(item.FilePath))
                             {
                                 ApplyTransforms(image, options, item.GetRedactionSnapshot(), item.GetSignatureSnapshot());
-                                var encoder = CreateEncoder(ResolveOutputFormat(item, options), options);
-                                image.Save(outputPath, encoder);
+                                SaveImage(image, outputPath, ResolveOutputFormat(item, options), options);
                             }
 
                             item.OutputPath = outputPath;
@@ -394,8 +395,7 @@ namespace Photo_zip.Services
 
                     using (var stitched = CreateStitchedImage(loadedImages, stitchOptions))
                     {
-                        var encoder = CreateEncoder(outputFormat, options);
-                        stitched.Save(outputPath, encoder);
+                        SaveImage(stitched, outputPath, outputFormat, options);
                     }
 
                     foreach (var item in list)
@@ -451,6 +451,7 @@ namespace Photo_zip.Services
             }
 
             options.Quality = Math.Max(0, Math.Min(100, options.Quality));
+            options.TargetSizeBytes = Math.Max(10 * 1024, Math.Min(500L * 1024 * 1024, options.TargetSizeBytes));
             options.PngColorCount = Math.Max(2, Math.Min(256, options.PngColorCount));
             options.ResizeWidth = Math.Max(0.01, Math.Min(20000, options.ResizeWidth));
             options.ResizeHeight = Math.Max(0.01, Math.Min(20000, options.ResizeHeight));
@@ -639,9 +640,7 @@ namespace Photo_zip.Services
                 }
 
                 var format = ResolveOutputFormat(item, options);
-                var encoder = CreateEncoder(format, options);
-                var stream = new MemoryStream();
-                image.Save(stream, encoder);
+                var stream = SaveImageToMemory(image, format, options);
                 stream.Position = 0;
                 return stream;
             }
@@ -757,19 +756,46 @@ namespace Photo_zip.Services
         private OutputFormat ResolveOutputFormat(ImageItem item, ProcessingOptions options)
         {
             var format = options.OutputFormat == OutputFormat.KeepOriginal ? FormatFromName(item.Format, item.FilePath) : options.OutputFormat;
+            format = ResolveTargetSizeFormat(format, options);
             return ResolveAlphaSafeFormat(format, options);
         }
 
         private OutputFormat ResolveOutputFormat(string filePath, ProcessingOptions options)
         {
             var format = options.OutputFormat == OutputFormat.KeepOriginal ? FormatFromExtension(Path.GetExtension(filePath)) : options.OutputFormat;
+            format = ResolveTargetSizeFormat(format, options);
             return ResolveAlphaSafeFormat(format, options);
         }
 
         private OutputFormat ResolveOutputFormatForStitch(ProcessingOptions options)
         {
             var format = options.OutputFormat == OutputFormat.KeepOriginal ? OutputFormat.Png : options.OutputFormat;
+            format = ResolveTargetSizeFormat(format, options);
             return ResolveAlphaSafeFormat(format, options);
+        }
+
+        private static OutputFormat ResolveTargetSizeFormat(OutputFormat format, ProcessingOptions options)
+        {
+            if (!options.TargetSizeEnabled)
+            {
+                return format;
+            }
+
+            if (options.BackgroundProcessingEnabled
+                && options.BackgroundAction == BackgroundAction.RemoveToTransparent
+                && !SupportsAlpha(format))
+            {
+                return OutputFormat.Webp;
+            }
+
+            if (IsQualityAdjustableFormat(format))
+            {
+                return format;
+            }
+
+            return options.BackgroundProcessingEnabled && options.BackgroundAction == BackgroundAction.RemoveToTransparent
+                ? OutputFormat.Webp
+                : OutputFormat.Jpeg;
         }
 
         private static OutputFormat ResolveAlphaSafeFormat(OutputFormat format, ProcessingOptions options)
@@ -1757,9 +1783,85 @@ namespace Photo_zip.Services
             }
         }
 
+        private MemoryStream SaveImageToMemory(Image<Rgba32> image, OutputFormat format, ProcessingOptions options)
+        {
+            if (options.TargetSizeEnabled && IsQualityAdjustableFormat(format))
+            {
+                return EncodeToTargetSize(image, format, options);
+            }
+
+            var stream = new MemoryStream();
+            image.Save(stream, CreateEncoder(format, options));
+            stream.Position = 0;
+            return stream;
+        }
+
+        private void SaveImage(Image<Rgba32> image, string outputPath, OutputFormat format, ProcessingOptions options)
+        {
+            using (var stream = SaveImageToMemory(image, format, options))
+            using (var fileStream = File.Create(outputPath))
+            {
+                stream.Position = 0;
+                stream.CopyTo(fileStream);
+            }
+        }
+
+        private MemoryStream EncodeToTargetSize(Image<Rgba32> image, OutputFormat format, ProcessingOptions options)
+        {
+            var targetBytes = Math.Max(10 * 1024, options.TargetSizeBytes);
+            var bestUnderTarget = default(byte[]);
+            var smallestBytes = default(byte[]);
+            var smallestLength = long.MaxValue;
+            var low = 1;
+            var high = Math.Max(1, Math.Min(100, options.Quality));
+
+            for (var attempt = 0; attempt < 8 && low <= high; attempt++)
+            {
+                var quality = (low + high) / 2;
+                var bytes = EncodeToBytes(image, format, options, quality);
+                if (bytes.LongLength < smallestLength)
+                {
+                    smallestLength = bytes.LongLength;
+                    smallestBytes = bytes;
+                }
+
+                if (bytes.LongLength <= targetBytes)
+                {
+                    bestUnderTarget = bytes;
+                    low = quality + 1;
+                }
+                else
+                {
+                    high = quality - 1;
+                }
+            }
+
+            var result = bestUnderTarget ?? smallestBytes ?? EncodeToBytes(image, format, options, 1);
+            return new MemoryStream(result, writable: false);
+        }
+
+        private byte[] EncodeToBytes(Image<Rgba32> image, OutputFormat format, ProcessingOptions options, int quality)
+        {
+            using (var stream = new MemoryStream())
+            {
+                image.Save(stream, CreateEncoder(format, options, quality));
+                return stream.ToArray();
+            }
+        }
+
+        private static bool IsQualityAdjustableFormat(OutputFormat format)
+        {
+            return format == OutputFormat.Jpeg || format == OutputFormat.Webp;
+        }
+
         private IImageEncoder CreateEncoder(OutputFormat format, ProcessingOptions options)
         {
-            var quality = Math.Max(0, Math.Min(100, options.Quality));
+            return CreateEncoder(format, options, options.Quality);
+        }
+
+        private IImageEncoder CreateEncoder(OutputFormat format, ProcessingOptions options, int requestedQuality)
+        {
+            var quality = Math.Max(1, Math.Min(100, requestedQuality));
 
             switch (format)
             {

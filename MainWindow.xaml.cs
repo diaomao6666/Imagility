@@ -29,6 +29,8 @@ namespace Photo_zip
         private CancellationTokenSource _previewCancellationTokenSource;
         private ImageItem _selectedImage;
         private int _quality = 80;
+        private bool _targetSizeEnabled;
+        private double _targetSizeKb = 512;
         private string _selectedOutputFormat = "保持原格式";
         private string _selectedCompressionMode = "有损压缩";
         private string _selectedConflictStrategy = "自动重命名";
@@ -132,6 +134,31 @@ namespace Photo_zip
             {
                 var clamped = Math.Max(0, Math.Min(100, value));
                 if (SetProperty(ref _quality, clamped))
+                {
+                    _ = RefreshPreviewAsync();
+                }
+            }
+        }
+
+        public bool TargetSizeEnabled
+        {
+            get { return _targetSizeEnabled; }
+            set
+            {
+                if (SetProperty(ref _targetSizeEnabled, value))
+                {
+                    _ = RefreshPreviewAsync();
+                }
+            }
+        }
+
+        public double TargetSizeKb
+        {
+            get { return _targetSizeKb; }
+            set
+            {
+                var clamped = Math.Max(10, Math.Min(512000, value));
+                if (SetProperty(ref _targetSizeKb, clamped))
                 {
                     _ = RefreshPreviewAsync();
                 }
@@ -1003,6 +1030,17 @@ namespace Photo_zip
             }
         }
 
+        private void ApplyIdPhotoBackgroundColor_Click(object sender, RoutedEventArgs e)
+        {
+            if (sender is FrameworkElement element && element.Tag is string color)
+            {
+                BackgroundProcessingEnabled = true;
+                SelectedBackgroundAction = "替换为纯色";
+                BackgroundReplacementColor = color;
+                CurrentStatus = "已应用证件照底色：" + color;
+            }
+        }
+
         private void PickStitchBackgroundColor_Click(object sender, RoutedEventArgs e)
         {
             if (sender is FrameworkElement element && element.Tag is string color)
@@ -1784,6 +1822,8 @@ namespace Photo_zip
                 OutputFormat = MapOutputFormat(SelectedOutputFormat),
                 CompressionMode = SelectedCompressionMode == "无损压缩" ? CompressionMode.Lossless : CompressionMode.Lossy,
                 Quality = Quality,
+                TargetSizeEnabled = TargetSizeEnabled,
+                TargetSizeBytes = (long)Math.Round(TargetSizeKb * 1024d),
                 QuantizePng = QuantizePng,
                 PngColorCount = PngColorCount,
                 OutputDirectory = OutputDirectory,
