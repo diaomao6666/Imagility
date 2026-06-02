@@ -421,22 +421,9 @@
 
                             <Border Background="White" CornerRadius="14" BorderBrush="{StaticResource BorderBrushSoft}" BorderThickness="1" Padding="14" Margin="0,0,0,12">
                                 <StackPanel>
-                                    <CheckBox Content="背景消除/替换" IsChecked="{Binding BackgroundProcessingEnabled, Mode=TwoWay}" />
-                                    <Border Background="#F8FAFC" CornerRadius="12" BorderBrush="{StaticResource BorderBrushSoft}" BorderThickness="1" Padding="10" Margin="0,12,0,0">
-                                        <StackPanel>
-                                            <TextBlock Text="证件照底色" FontWeight="SemiBold" Foreground="#0F172A" />
-                                            <TextBlock Text="一键启用背景替换，适合蓝底、白底、红底等常用证件照。" TextWrapping="Wrap" Foreground="{StaticResource MutedTextBrush}" Margin="0,6,0,10" />
-                                            <WrapPanel>
-                                                <Button Content="蓝底" Tag="#3B82F6" Click="ApplyIdPhotoBackgroundColor_Click" Style="{StaticResource SecondaryButtonStyle}" Margin="0,0,8,8" />
-                                                <Button Content="白底" Tag="#FFFFFF" Click="ApplyIdPhotoBackgroundColor_Click" Style="{StaticResource SecondaryButtonStyle}" Margin="0,0,8,8" />
-                                                <Button Content="红底" Tag="#EF4444" Click="ApplyIdPhotoBackgroundColor_Click" Style="{StaticResource SecondaryButtonStyle}" Margin="0,0,8,8" />
-                                                <Button Content="浅灰底" Tag="#F8FAFC" Click="ApplyIdPhotoBackgroundColor_Click" Style="{StaticResource SecondaryButtonStyle}" Margin="0,0,8,8" />
-                                            </WrapPanel>
-                                        </StackPanel>
-                                    </Border>
+                                    <CheckBox Content="背景消除" IsChecked="{Binding BackgroundProcessingEnabled, Mode=TwoWay}" />
                                     <StackPanel IsEnabled="{Binding BackgroundProcessingEnabled}" Margin="0,12,0,0">
-                                        <TextBlock Text="处理方式" FontWeight="SemiBold" />
-                                        <ComboBox ItemsSource="{Binding BackgroundActions}" SelectedItem="{Binding SelectedBackgroundAction, Mode=TwoWay}" Margin="0,8,0,12" />
+                                        <TextBlock Text="将识别到的纯色背景处理为透明区域；如果同时启用证件照处理，会按证件照主背景识别以避开黑框等装饰边缘。" TextWrapping="Wrap" Foreground="{StaticResource MutedTextBrush}" Margin="0,0,0,12" />
 
                                         <TextBlock Text="识别容差" FontWeight="SemiBold" />
                                         <DockPanel Margin="0,8,0,12">
@@ -447,15 +434,31 @@
                                         </DockPanel>
 
                                         <TextBlock Text="边缘过渡" FontWeight="SemiBold" />
-                                        <DockPanel Margin="0,8,0,12">
+                                        <DockPanel Margin="0,8,0,0">
                                             <Border DockPanel.Dock="Right" Background="#DBEAFE" CornerRadius="9" Padding="10,4" Margin="12,0,0,0">
                                                 <TextBlock Text="{Binding BackgroundFeather}" MinWidth="34" TextAlignment="Center" Foreground="{StaticResource PrimaryDarkBrush}" FontWeight="Bold" />
                                             </Border>
                                             <Slider Minimum="0" Maximum="100" TickFrequency="1" Value="{Binding BackgroundFeather, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" />
                                         </DockPanel>
+                                    </StackPanel>
+                                </StackPanel>
+                            </Border>
 
-                                        <TextBlock Text="替换色" FontWeight="SemiBold" />
-                                        <TextBox Text="{Binding BackgroundReplacementColor, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" Margin="0,8,0,8" />
+                            <Border Background="White" CornerRadius="14" BorderBrush="{StaticResource BorderBrushSoft}" BorderThickness="1" Padding="14" Margin="0,0,0,12">
+                                <StackPanel>
+                                    <CheckBox Content="证件照处理" IsChecked="{Binding IdPhotoProcessingEnabled, Mode=TwoWay}" />
+                                    <StackPanel IsEnabled="{Binding IdPhotoProcessingEnabled}" Margin="0,12,0,0">
+                                        <TextBlock Text="识别证件照主背景色并替换为目标底色；会避开外侧黑框等装饰边缘，复杂背景建议先使用背景消除。" TextWrapping="Wrap" Foreground="{StaticResource MutedTextBrush}" Margin="0,0,0,12" />
+                                        <TextBlock Text="证件照底色" FontWeight="SemiBold" />
+                                        <WrapPanel Margin="0,8,0,4">
+                                            <Button Content="蓝底" Tag="#3B82F6" Click="ApplyIdPhotoBackgroundColor_Click" Style="{StaticResource SecondaryButtonStyle}" Margin="0,0,8,8" />
+                                            <Button Content="白底" Tag="#FFFFFF" Click="ApplyIdPhotoBackgroundColor_Click" Style="{StaticResource SecondaryButtonStyle}" Margin="0,0,8,8" />
+                                            <Button Content="红底" Tag="#EF4444" Click="ApplyIdPhotoBackgroundColor_Click" Style="{StaticResource SecondaryButtonStyle}" Margin="0,0,8,8" />
+                                            <Button Content="浅灰底" Tag="#F8FAFC" Click="ApplyIdPhotoBackgroundColor_Click" Style="{StaticResource SecondaryButtonStyle}" Margin="0,0,8,8" />
+                                        </WrapPanel>
+
+                                        <TextBlock Text="自定义底色" FontWeight="SemiBold" />
+                                        <TextBox Text="{Binding IdPhotoBackgroundColor, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" Margin="0,8,0,8" />
                                         <ItemsControl ItemsSource="{Binding BackgroundColorPalette}">
                                             <ItemsControl.ItemsPanel>
                                                 <ItemsPanelTemplate>
@@ -464,7 +467,7 @@
                                             </ItemsControl.ItemsPanel>
                                             <ItemsControl.ItemTemplate>
                                                 <DataTemplate>
-                                                    <Button Width="26" Height="26" Padding="0" Margin="0,0,8,8" Tag="{Binding}" Click="PickBackgroundReplacementColor_Click" ToolTip="{Binding}">
+                                                    <Button Width="26" Height="26" Padding="0" Margin="0,0,8,8" Tag="{Binding}" Click="PickIdPhotoBackgroundColor_Click" ToolTip="{Binding}">
                                                         <Button.Template>
                                                             <ControlTemplate TargetType="Button">
                                                                 <Border Background="{Binding}"
@@ -645,7 +648,7 @@
 
                 <WrapPanel Grid.Column="2" VerticalAlignment="Center" HorizontalAlignment="Right" MaxWidth="300">
                     <Button Content="开始转换" Click="StartConvert_Click" IsEnabled="{Binding CanStart}" MinWidth="78" Margin="0,3,8,3" />
-                    <Button Content="合并/拼接" Click="StitchImages_Click" IsEnabled="{Binding CanStart}" Style="{StaticResource SecondaryButtonStyle}" MinWidth="78" Margin="0,3,8,3" />
+                    <Button Content="合并/拼接" Click="StitchImages_Click" IsEnabled="{Binding CanStitch}" Style="{StaticResource SecondaryButtonStyle}" MinWidth="78" Margin="0,3,8,3" />
                     <Button Content="导出 PDF" Click="ExportPdf_Click" IsEnabled="{Binding CanExportPdf}" Style="{StaticResource SecondaryButtonStyle}" MinWidth="78" Margin="0,3,8,3" />
                     <Button Content="停止" Click="StopConvert_Click" IsEnabled="{Binding IsProcessing}" Style="{StaticResource SecondaryButtonStyle}" MinWidth="64" Margin="0,3,8,3" />
                     <Button Content="打开输出文件夹" Click="OpenOutputDirectory_Click" Style="{StaticResource SecondaryButtonStyle}" MinWidth="112" Margin="0,3,0,3" />

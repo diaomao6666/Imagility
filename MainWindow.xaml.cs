@@ -49,10 +49,10 @@ namespace Photo_zip
         private int _watermarkOpacity = 35;
         private int _watermarkFontSize = 36;
         private bool _backgroundProcessingEnabled;
-        private string _selectedBackgroundAction = "移除为透明";
         private int _backgroundTolerance = 28;
         private int _backgroundFeather = 12;
-        private string _backgroundReplacementColor = "#FFFFFF";
+        private bool _idPhotoProcessingEnabled;
+        private string _idPhotoBackgroundColor = "#FFFFFF";
         private string _selectedStitchMode = "网格拼贴";
         private int _stitchColumns = 2;
         private int _stitchSpacing = 0;
@@ -68,6 +68,7 @@ namespace Photo_zip
         private int _mosaicBlockSize = 12;
         private int _blurRadius = 8;
         private int _redactionBrushSize = 32;
+        private bool _isApplyingIdPhotoBackground;
         private bool _isDrawingRedaction;
         private readonly List<Point> _currentRedactionPath = new List<Point>();
         private SignatureOverlay _activeSignatureOverlay;
@@ -99,7 +100,6 @@ namespace Photo_zip
         public string[] CompressionModes { get; } = { "无损压缩", "有损压缩" };
         public string[] ConflictStrategies { get; } = { "覆盖", "自动重命名", "跳过" };
         public string[] WatermarkPositions { get; } = { "左上角", "右上角", "居中", "左下角", "右下角" };
-        public string[] BackgroundActions { get; } = { "移除为透明", "替换为纯色" };
         public string[] ResizeUnits { get; } = { "像素", "厘米", "毫米", "英寸" };
         public string[] StitchModes { get; } = { "纵向拼接", "横向拼接", "网格拼贴", "瀑布流拼贴", "主图海报", "自由排列" };
         public string[] CollageFitModes { get; } = { "填满裁切", "完整留白" };
@@ -122,6 +122,7 @@ namespace Photo_zip
                     IsRedactionMode = false;
                     SyncResizeInputsFromSelectedImage();
                     OnPropertyChanged(nameof(HasSelectedImage));
+                    OnPropertyChanged(nameof(CanStart));
                     _ = RefreshPreviewAsync();
                 }
             }
@@ -381,18 +382,6 @@ namespace Photo_zip
             }
         }
 
-        public string SelectedBackgroundAction
-        {
-            get { return _selectedBackgroundAction; }
-            set
-            {
-                if (SetProperty(ref _selectedBackgroundAction, value))
-                {
-                    _ = RefreshPreviewAsync();
-                }
-            }
-        }
-
         public int BackgroundTolerance
         {
             get { return _backgroundTolerance; }
@@ -419,12 +408,24 @@ namespace Photo_zip
             }
         }
 
-        public string BackgroundReplacementColor
+        public bool IdPhotoProcessingEnabled
         {
-            get { return _backgroundReplacementColor; }
+            get { return _idPhotoProcessingEnabled; }
             set
             {
-                if (SetProperty(ref _backgroundReplacementColor, value))
+                if (SetProperty(ref _idPhotoProcessingEnabled, value) && !_isApplyingIdPhotoBackground)
+                {
+                    _ = RefreshPreviewAsync();
+                }
+            }
+        }
+
+        public string IdPhotoBackgroundColor
+        {
+            get { return _idPhotoBackgroundColor; }
+            set
+            {
+                if (SetProperty(ref _idPhotoBackgroundColor, value) && !_isApplyingIdPhotoBackground)
                 {
                     _ = RefreshPreviewAsync();
                 }
@@ -624,6 +625,7 @@ namespace Photo_zip
                 if (SetProperty(ref _isProcessing, value))
                 {
                     OnPropertyChanged(nameof(CanStart));
+                    OnPropertyChanged(nameof(CanStitch));
                     OnPropertyChanged(nameof(CanExportPdf));
                 }
             }
@@ -650,7 +652,8 @@ namespace Photo_zip
         public bool HasItems => Images.Count > 0;
         public bool HasSelectedImage => SelectedImage != null;
         public bool HasCheckedImages => Images.Any(x => x.IsSelected);
-        public bool CanStart => !IsProcessing && HasCheckedImages;
+        public bool CanStart => !IsProcessing && HasSelectedImage;
+        public bool CanStitch => !IsProcessing && Images.Count(x => x.IsSelected) >= 2;
         public bool CanExportPdf => !IsProcessing && HasItems;
 
         private void SyncResizeInputsFromSelectedImage()
@@ -895,6 +898,7 @@ namespace Photo_zip
             OnPropertyChanged(nameof(HasItems));
             OnPropertyChanged(nameof(HasCheckedImages));
             OnPropertyChanged(nameof(CanStart));
+            OnPropertyChanged(nameof(CanStitch));
             OnPropertyChanged(nameof(CanExportPdf));
             CurrentStatus = added > 0 ? $"已导入 {added} 张图片" : "没有新增图片";
         }
@@ -908,6 +912,7 @@ namespace Photo_zip
 
             OnPropertyChanged(nameof(HasCheckedImages));
             OnPropertyChanged(nameof(CanStart));
+            OnPropertyChanged(nameof(CanStitch));
             OnPropertyChanged(nameof(CanExportPdf));
         }
 
@@ -920,6 +925,7 @@ namespace Photo_zip
 
             OnPropertyChanged(nameof(HasCheckedImages));
             OnPropertyChanged(nameof(CanStart));
+            OnPropertyChanged(nameof(CanStitch));
             OnPropertyChanged(nameof(CanExportPdf));
         }
 
@@ -964,6 +970,7 @@ namespace Photo_zip
             OnPropertyChanged(nameof(HasItems));
             OnPropertyChanged(nameof(HasCheckedImages));
             OnPropertyChanged(nameof(CanStart));
+            OnPropertyChanged(nameof(CanStitch));
             OnPropertyChanged(nameof(CanExportPdf));
         }
 
@@ -981,6 +988,7 @@ namespace Photo_zip
             OnPropertyChanged(nameof(HasItems));
             OnPropertyChanged(nameof(HasCheckedImages));
             OnPropertyChanged(nameof(CanStart));
+            OnPropertyChanged(nameof(CanStitch));
             OnPropertyChanged(nameof(CanExportPdf));
         }
 
@@ -990,6 +998,7 @@ namespace Photo_zip
             {
                 OnPropertyChanged(nameof(HasCheckedImages));
                 OnPropertyChanged(nameof(CanStart));
+                OnPropertyChanged(nameof(CanStitch));
                 OnPropertyChanged(nameof(CanExportPdf));
                 _ = RefreshPreviewAsync();
             }
@@ -1022,11 +1031,11 @@ namespace Photo_zip
             }
         }
 
-        private void PickBackgroundReplacementColor_Click(object sender, RoutedEventArgs e)
+        private void PickIdPhotoBackgroundColor_Click(object sender, RoutedEventArgs e)
         {
             if (sender is FrameworkElement element && element.Tag is string color)
             {
-                BackgroundReplacementColor = color;
+                IdPhotoBackgroundColor = color;
             }
         }
 
@@ -1034,10 +1043,19 @@ namespace Photo_zip
         {
             if (sender is FrameworkElement element && element.Tag is string color)
             {
-                BackgroundProcessingEnabled = true;
-                SelectedBackgroundAction = "替换为纯色";
-                BackgroundReplacementColor = color;
+                _isApplyingIdPhotoBackground = true;
+                try
+                {
+                    IdPhotoProcessingEnabled = true;
+                    IdPhotoBackgroundColor = color;
+                }
+                finally
+                {
+                    _isApplyingIdPhotoBackground = false;
+                }
+
                 CurrentStatus = "已应用证件照底色：" + color;
+                _ = RefreshPreviewAsync();
             }
         }
 
@@ -1051,10 +1069,10 @@ namespace Photo_zip
 
         private async void StartConvert_Click(object sender, RoutedEventArgs e)
         {
-            var selected = Images.Where(x => x.IsSelected).ToList();
+            var selected = ResolveConversionTargets();
             if (!selected.Any())
             {
-                MessageBox.Show("请先勾选需要处理的图片。", "提示", MessageBoxButton.OK, MessageBoxImage.Information);
+                MessageBox.Show("请先选择或勾选需要处理的图片。", "提示", MessageBoxButton.OK, MessageBoxImage.Information);
                 return;
             }
 
@@ -1083,7 +1101,7 @@ namespace Photo_zip
             try
             {
                 await _imageService.ProcessBatchAsync(selected, options, progress, _batchCancellationTokenSource.Token);
-                CurrentStatus = "批量处理完成";
+                CurrentStatus = selected.Count == 1 ? "处理完成" : "批量处理完成";
                 ProgressValue = 100;
             }
             catch (OperationCanceledException)
@@ -1096,6 +1114,17 @@ namespace Photo_zip
                 _batchCancellationTokenSource.Dispose();
                 _batchCancellationTokenSource = null;
             }
+        }
+
+        private List<ImageItem> ResolveConversionTargets()
+        {
+            var selected = Images.Where(x => x.IsSelected).ToList();
+            if (selected.Any())
+            {
+                return selected;
+            }
+
+            return SelectedImage != null ? new List<ImageItem> { SelectedImage } : new List<ImageItem>();
         }
 
         private async void StitchImages_Click(object sender, RoutedEventArgs e)
@@ -1764,13 +1793,13 @@ namespace Photo_zip
             var image = SelectedImage;
             if (image == null)
             {
-                _previewCancellationTokenSource?.Cancel();
+                CancelPreviewRequest();
                 EditedPreview = null;
                 IsPreviewBusy = false;
                 return;
             }
 
-            _previewCancellationTokenSource?.Cancel();
+            CancelPreviewRequest();
             var cancellationSource = new CancellationTokenSource();
             _previewCancellationTokenSource = cancellationSource;
             var token = cancellationSource.Token;
@@ -1812,10 +1841,29 @@ namespace Photo_zip
             {
                 if (ReferenceEquals(_previewCancellationTokenSource, cancellationSource))
                 {
+                    _previewCancellationTokenSource = null;
                     IsPreviewBusy = false;
                 }
 
                 cancellationSource.Dispose();
+            }
+        }
+
+        private void CancelPreviewRequest()
+        {
+            var cancellationSource = _previewCancellationTokenSource;
+            _previewCancellationTokenSource = null;
+            if (cancellationSource == null)
+            {
+                return;
+            }
+
+            try
+            {
+                cancellationSource.Cancel();
+            }
+            catch (ObjectDisposedException)
+            {
             }
         }
 
@@ -1844,10 +1892,10 @@ namespace Photo_zip
                 WatermarkOpacity = WatermarkOpacity,
                 WatermarkFontSize = WatermarkFontSize,
                 BackgroundProcessingEnabled = BackgroundProcessingEnabled,
-                BackgroundAction = MapBackgroundAction(SelectedBackgroundAction),
                 BackgroundTolerance = BackgroundTolerance,
                 BackgroundFeather = BackgroundFeather,
-                BackgroundReplacementColor = BackgroundReplacementColor
+                IdPhotoProcessingEnabled = IdPhotoProcessingEnabled,
+                IdPhotoBackgroundColor = IdPhotoBackgroundColor
             };
         }
 
@@ -1924,11 +1972,6 @@ namespace Photo_zip
                 default:
                     return WatermarkPosition.BottomRight;
             }
-        }
-
-        private static BackgroundAction MapBackgroundAction(string value)
-        {
-            return value == "替换为纯色" ? BackgroundAction.ReplaceWithColor : BackgroundAction.RemoveToTransparent;
         }
 
         private static ResizeUnit MapResizeUnit(string value)

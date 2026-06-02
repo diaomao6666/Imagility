@@ -64,12 +64,6 @@ namespace Photo_zip.Services
         BottomRight
     }
 
-    public enum BackgroundAction
-    {
-        RemoveToTransparent,
-        ReplaceWithColor
-    }
-
     public enum ResizeUnit
     {
         Pixel,
@@ -117,10 +111,10 @@ namespace Photo_zip.Services
         public int WatermarkOpacity { get; set; } = 35;
         public int WatermarkFontSize { get; set; } = 36;
         public bool BackgroundProcessingEnabled { get; set; }
-        public BackgroundAction BackgroundAction { get; set; } = BackgroundAction.RemoveToTransparent;
         public int BackgroundTolerance { get; set; } = 28;
         public int BackgroundFeather { get; set; } = 12;
-        public string BackgroundReplacementColor { get; set; } = "#FFFFFF";
+        public bool IdPhotoProcessingEnabled { get; set; }
+        public string IdPhotoBackgroundColor { get; set; } = "#FFFFFF";
     }
 
     public sealed class ProcessingProgress
@@ -274,7 +268,7 @@ namespace Photo_zip.Services
                     {
                         cancellationToken.ThrowIfCancellationRequested();
                         var image = LoadOrientedImage(item.FilePath);
-                        ApplyTransforms(image, options, item.GetRedactionSnapshot(), item.GetSignatureSnapshot());
+                        ApplyTransforms(image, options, item.GetRedactionSnapshot(), item.GetSignatureSnapshot(), cancellationToken);
                         loadedImages.Add(image);
                     }
 
@@ -304,7 +298,12 @@ namespace Photo_zip.Services
         {
             return Task.Run(() =>
             {
-                var list = CreateSelectedSnapshots(items);
+                var list = CreateSnapshots(items);
+                if (!list.Any())
+                {
+                    throw new InvalidOperationException("请先选择或勾选需要处理的图片。");
+                }
+
                 var total = list.Count;
                 var completed = 0;
 
@@ -332,7 +331,7 @@ namespace Photo_zip.Services
                             Directory.CreateDirectory(Path.GetDirectoryName(outputPath));
                             using (var image = LoadOrientedImage(snapshot.FilePath))
                             {
-                                ApplyTransforms(image, options, snapshot.Redactions, snapshot.Signatures);
+                                ApplyTransforms(image, options, snapshot.Redactions, snapshot.Signatures, cancellationToken);
                                 SaveImage(image, outputPath, ResolveOutputFormat(item, options), options, cancellationToken);
                             }
 
@@ -390,7 +389,7 @@ namespace Photo_zip.Services
                         });
 
                         var image = LoadOrientedImage(snapshot.FilePath);
-                        ApplyTransforms(image, options, snapshot.Redactions, snapshot.Signatures);
+                        ApplyTransforms(image, options, snapshot.Redactions, snapshot.Signatures, cancellationToken);
                         loadedImages.Add(image);
                     }
 
@@ -480,9 +479,9 @@ namespace Photo_zip.Services
                 throw new ArgumentException("启用水印时，请输入水印文字。");
             }
 
-            if (options.BackgroundProcessingEnabled)
+            if (options.IdPhotoProcessingEnabled)
             {
-                ParseHexColor(options.BackgroundReplacementColor);
+                ParseHexColor(options.IdPhotoBackgroundColor);
             }
 
             if (!string.IsNullOrWhiteSpace(options.OutputDirectory))
@@ -547,7 +546,7 @@ namespace Photo_zip.Services
                     Message = "正在写入 PDF 页面"
                 });
 
-                var page = CreatePdfPageImage(snapshot, options, pdfOptions);
+                var page = CreatePdfPageImage(snapshot, options, pdfOptions, cancellationToken);
                 snapshot.Item.Status = "已加入 PDF";
                 return page;
             });
@@ -596,7 +595,7 @@ namespace Photo_zip.Services
                     else
                     {
                         Directory.CreateDirectory(Path.GetDirectoryName(outputPath));
-                        var page = CreatePdfPageImage(snapshot, options, pdfOptions);
+                        var page = CreatePdfPageImage(snapshot, options, pdfOptions, cancellationToken);
                         WritePdf(outputPath, new[] { page });
                         item.OutputPath = outputPath;
                         item.Status = "PDF 完成";
@@ -624,12 +623,13 @@ namespace Photo_zip.Services
             return outputPaths;
         }
 
-        private PdfPageImage CreatePdfPageImage(ProcessingImageSnapshot snapshot, ProcessingOptions options, PdfExportOptions pdfOptions)
+        private PdfPageImage CreatePdfPageImage(ProcessingImageSnapshot snapshot, ProcessingOptions options, PdfExportOptions pdfOptions, CancellationToken cancellationToken)
         {
             using (var image = LoadOrientedImage(snapshot.FilePath))
             {
-                ApplyTransforms(image, options, snapshot.Redactions, snapshot.Signatures);
-                FlattenForPdf(image);
+                ApplyTransforms(image, options, snapshot.Redactions, snapshot.Signatures, cancellationToken);
+                cancellationToken.ThrowIfCancellationRequested();
+                FlattenForPdf(image, cancellationToken);
 
                 using (var stream = new MemoryStream())
                 {
@@ -652,7 +652,7 @@ namespace Photo_zip.Services
             using (var image = LoadOrientedImage(item.FilePath))
             {
                 cancellationToken.ThrowIfCancellationRequested();
-                ApplyTransforms(image, options, item.GetRedactionSnapshot(), item.GetSignatureSnapshot());
+                ApplyTransforms(image, options, item.GetRedactionSnapshot(), item.GetSignatureSnapshot(), cancellationToken);
 
                 if (preview)
                 {
@@ -836,9 +836,7 @@ namespace Photo_zip.Services
                 return format;
             }
 
-            if (options.BackgroundProcessingEnabled
-                && options.BackgroundAction == BackgroundAction.RemoveToTransparent
-                && !SupportsAlpha(format))
+            if (options.BackgroundProcessingEnabled && !SupportsAlpha(format))
             {
                 return OutputFormat.Webp;
             }
@@ -848,16 +846,12 @@ namespace Photo_zip.Services
                 return format;
             }
 
-            return options.BackgroundProcessingEnabled && options.BackgroundAction == BackgroundAction.RemoveToTransparent
-                ? OutputFormat.Webp
-                : OutputFormat.Jpeg;
+            return options.BackgroundProcessingEnabled ? OutputFormat.Webp : OutputFormat.Jpeg;
         }
 
         private static OutputFormat ResolveAlphaSafeFormat(OutputFormat format, ProcessingOptions options)
         {
-            if (options.BackgroundProcessingEnabled
-                && options.BackgroundAction == BackgroundAction.RemoveToTransparent
-                && !SupportsAlpha(format))
+            if (options.BackgroundProcessingEnabled && !SupportsAlpha(format))
             {
                 return OutputFormat.Png;
             }
@@ -870,8 +864,9 @@ namespace Photo_zip.Services
             return format == OutputFormat.Png || format == OutputFormat.Webp || format == OutputFormat.Gif || format == OutputFormat.Tiff;
         }
 
-        private static void ApplyTransforms(Image<Rgba32> image, ProcessingOptions options, IReadOnlyList<RedactionOperation> redactions, IReadOnlyList<SignatureOverlay> signatures)
+        private static void ApplyTransforms(Image<Rgba32> image, ProcessingOptions options, IReadOnlyList<RedactionOperation> redactions, IReadOnlyList<SignatureOverlay> signatures, CancellationToken cancellationToken)
         {
+            cancellationToken.ThrowIfCancellationRequested();
             ApplyRedactions(image, redactions);
             var originalWidth = image.Width;
             var originalHeight = image.Height;
@@ -890,7 +885,12 @@ namespace Photo_zip.Services
 
             if (options.BackgroundProcessingEnabled)
             {
-                ApplyBackgroundProcessing(image, options);
+                ApplyBackgroundRemoval(image, options, cancellationToken);
+            }
+
+            if (options.IdPhotoProcessingEnabled)
+            {
+                ApplyIdPhotoBackground(image, options, cancellationToken);
             }
 
             ApplySignatures(image, signatures, originalWidth, originalHeight);
@@ -1512,12 +1512,13 @@ namespace Photo_zip.Services
             return index;
         }
 
-        private static void FlattenForPdf(Image<Rgba32> image)
+        private static void FlattenForPdf(Image<Rgba32> image, CancellationToken cancellationToken)
         {
             image.ProcessPixelRows(accessor =>
             {
                 for (var y = 0; y < accessor.Height; y++)
                 {
+                    cancellationToken.ThrowIfCancellationRequested();
                     var row = accessor.GetRowSpan(y);
                     for (var x = 0; x < row.Length; x++)
                     {
@@ -1645,10 +1646,12 @@ namespace Photo_zip.Services
             }
         }
 
-        private static void ApplyBackgroundProcessing(Image<Rgba32> image, ProcessingOptions options)
+        private static void ApplyBackgroundRemoval(Image<Rgba32> image, ProcessingOptions options, CancellationToken cancellationToken)
         {
-            var backgroundColor = EstimateBackgroundColor(image);
-            var replacementColor = ParseHexColor(options.BackgroundReplacementColor);
+            cancellationToken.ThrowIfCancellationRequested();
+            var backgroundColor = options.IdPhotoProcessingEnabled
+                ? EstimateIdPhotoBackgroundColor(image)
+                : EstimateBackgroundColor(image);
             var tolerance = Math.Max(0, Math.Min(255, options.BackgroundTolerance));
             var feather = Math.Max(0, Math.Min(100, options.BackgroundFeather));
             var softRange = Math.Max(1, feather);
@@ -1657,6 +1660,7 @@ namespace Photo_zip.Services
             {
                 for (var y = 0; y < accessor.Height; y++)
                 {
+                    cancellationToken.ThrowIfCancellationRequested();
                     var row = accessor.GetRowSpan(y);
                     for (var x = 0; x < row.Length; x++)
                     {
@@ -1670,23 +1674,445 @@ namespace Photo_zip.Services
 
                         var alphaFactor = distance <= tolerance ? 0d : (distance - tolerance) / softRange;
                         var alpha = (byte)Math.Round(pixel.A * alphaFactor);
-
-                        if (options.BackgroundAction == BackgroundAction.ReplaceWithColor)
-                        {
-                            var blend = 1d - alphaFactor;
-                            row[x] = new Rgba32(
-                                BlendChannel(pixel.R, replacementColor.R, blend),
-                                BlendChannel(pixel.G, replacementColor.G, blend),
-                                BlendChannel(pixel.B, replacementColor.B, blend),
-                                255);
-                        }
-                        else
-                        {
-                            row[x] = new Rgba32(pixel.R, pixel.G, pixel.B, alpha);
-                        }
+                        row[x] = new Rgba32(pixel.R, pixel.G, pixel.B, alpha);
                     }
                 }
             });
+        }
+
+        private static void ApplyIdPhotoBackground(Image<Rgba32> image, ProcessingOptions options, CancellationToken cancellationToken)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            var replacementColor = ParseHexColor(options.IdPhotoBackgroundColor);
+            var sourceBackgroundColor = EstimateIdPhotoBackgroundColor(image);
+            var connectedBackgroundMask = CreateEdgeConnectedBackgroundMask(image, options, sourceBackgroundColor, cancellationToken);
+            RefineIdPhotoBackgroundMask(image, connectedBackgroundMask, options, sourceBackgroundColor, cancellationToken);
+            FillSmallIdPhotoBackgroundArtifacts(image, connectedBackgroundMask, options, sourceBackgroundColor, cancellationToken);
+
+            image.ProcessPixelRows(accessor =>
+            {
+                for (var y = 0; y < accessor.Height; y++)
+                {
+                    cancellationToken.ThrowIfCancellationRequested();
+                    var row = accessor.GetRowSpan(y);
+                    for (var x = 0; x < row.Length; x++)
+                    {
+                        var pixel = row[x];
+                        if (pixel.A < 255)
+                        {
+                            row[x] = BlendTransparentPixel(pixel, replacementColor);
+                            continue;
+                        }
+
+                        if (!connectedBackgroundMask[x, y])
+                        {
+                            continue;
+                        }
+
+                        row[x] = replacementColor;
+                    }
+                }
+            });
+        }
+
+        private static bool[,] CreateEdgeConnectedBackgroundMask(Image<Rgba32> image, ProcessingOptions options, Rgba32 sourceBackgroundColor, CancellationToken cancellationToken)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            var mask = new bool[image.Width, image.Height];
+            if (image.Width <= 0 || image.Height <= 0)
+            {
+                return mask;
+            }
+
+            var queue = new Queue<int>();
+
+            Action<int, int> enqueueIfBackground = (x, y) =>
+            {
+                if (x < 0 || y < 0 || x >= image.Width || y >= image.Height || mask[x, y])
+                {
+                    return;
+                }
+
+                if (ResolveBackgroundReplacementStrength(image[x, y], sourceBackgroundColor, options) <= 0d)
+                {
+                    return;
+                }
+
+                mask[x, y] = true;
+                queue.Enqueue(y * image.Width + x);
+            };
+
+            var maxInset = Math.Max(0, Math.Min(image.Width, image.Height) / 5);
+            var insets = new[]
+            {
+                0,
+                Math.Max(1, Math.Min(maxInset, Math.Min(image.Width, image.Height) / 32)),
+                Math.Max(1, Math.Min(maxInset, Math.Min(image.Width, image.Height) / 18)),
+                Math.Max(1, Math.Min(maxInset, Math.Min(image.Width, image.Height) / 10))
+            }
+            .Distinct()
+            .ToArray();
+
+            foreach (var inset in insets)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                var left = Math.Min(inset, image.Width - 1);
+                var top = Math.Min(inset, image.Height - 1);
+                var right = Math.Max(left, image.Width - 1 - inset);
+                var bottom = Math.Max(top, image.Height - 1 - inset);
+
+                for (var x = left; x <= right; x++)
+                {
+                    enqueueIfBackground(x, top);
+                    enqueueIfBackground(x, bottom);
+                }
+
+                for (var y = top + 1; y < bottom; y++)
+                {
+                    enqueueIfBackground(left, y);
+                    enqueueIfBackground(right, y);
+                }
+            }
+
+            while (queue.Count > 0)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                var index = queue.Dequeue();
+                var x = index % image.Width;
+                var y = index / image.Width;
+                enqueueIfBackground(x + 1, y);
+                enqueueIfBackground(x - 1, y);
+                enqueueIfBackground(x, y + 1);
+                enqueueIfBackground(x, y - 1);
+            }
+
+            return mask;
+        }
+
+        private static void RefineIdPhotoBackgroundMask(Image<Rgba32> image, bool[,] mask, ProcessingOptions options, Rgba32 sourceBackgroundColor, CancellationToken cancellationToken)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            if (image.Width <= 2 || image.Height <= 2)
+            {
+                return;
+            }
+
+            var relaxedTolerance = Math.Min(255, Math.Max(options.BackgroundTolerance + options.BackgroundFeather * 2, options.BackgroundTolerance + 48));
+            for (var pass = 0; pass < 3; pass++)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                var additions = new List<Point>();
+                for (var y = 1; y < image.Height - 1; y++)
+                {
+                    cancellationToken.ThrowIfCancellationRequested();
+                    for (var x = 1; x < image.Width - 1; x++)
+                    {
+                        if (mask[x, y])
+                        {
+                            continue;
+                        }
+
+                        var neighborCount = CountMaskedNeighbors(mask, x, y);
+                        if (neighborCount < 5)
+                        {
+                            continue;
+                        }
+
+                        var distance = ColorDistance(image[x, y], sourceBackgroundColor);
+                        if (distance <= relaxedTolerance)
+                        {
+                            additions.Add(new Point(x, y));
+                        }
+                    }
+                }
+
+                if (additions.Count == 0)
+                {
+                    return;
+                }
+
+                foreach (var point in additions)
+                {
+                    mask[point.X, point.Y] = true;
+                }
+            }
+        }
+
+        private static void FillSmallIdPhotoBackgroundArtifacts(Image<Rgba32> image, bool[,] mask, ProcessingOptions options, Rgba32 sourceBackgroundColor, CancellationToken cancellationToken)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            if (image.Width <= 2 || image.Height <= 2)
+            {
+                return;
+            }
+
+            var visited = new bool[image.Width, image.Height];
+            var maxArtifactPixels = Math.Max(32, Math.Min(6000, image.Width * image.Height / 180));
+            var relaxedTolerance = Math.Min(255, Math.Max(options.BackgroundTolerance + options.BackgroundFeather * 3, options.BackgroundTolerance + 72));
+
+            for (var y = 1; y < image.Height - 1; y++)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                for (var x = 1; x < image.Width - 1; x++)
+                {
+                    if (mask[x, y] || visited[x, y])
+                    {
+                        continue;
+                    }
+
+                    var component = CollectCandidateArtifactComponent(image, mask, visited, x, y, sourceBackgroundColor, relaxedTolerance, maxArtifactPixels, cancellationToken);
+                    if (component.Count == 0 || component.Count > maxArtifactPixels)
+                    {
+                        continue;
+                    }
+
+                    if (!IsBackgroundArtifactComponent(mask, component))
+                    {
+                        continue;
+                    }
+
+                    foreach (var point in component)
+                    {
+                        mask[point.X, point.Y] = true;
+                    }
+                }
+            }
+        }
+
+        private static List<Point> CollectCandidateArtifactComponent(Image<Rgba32> image, bool[,] mask, bool[,] visited, int startX, int startY, Rgba32 sourceBackgroundColor, double relaxedTolerance, int maxPixels, CancellationToken cancellationToken)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            var component = new List<Point>();
+            var queue = new Queue<Point>();
+            queue.Enqueue(new Point(startX, startY));
+            visited[startX, startY] = true;
+
+            while (queue.Count > 0)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                var point = queue.Dequeue();
+                if (mask[point.X, point.Y])
+                {
+                    continue;
+                }
+
+                if (ColorDistance(image[point.X, point.Y], sourceBackgroundColor) > relaxedTolerance)
+                {
+                    continue;
+                }
+
+                component.Add(point);
+                if (component.Count > maxPixels)
+                {
+                    return component;
+                }
+
+                EnqueueArtifactNeighbor(image, mask, visited, queue, point.X + 1, point.Y);
+                EnqueueArtifactNeighbor(image, mask, visited, queue, point.X - 1, point.Y);
+                EnqueueArtifactNeighbor(image, mask, visited, queue, point.X, point.Y + 1);
+                EnqueueArtifactNeighbor(image, mask, visited, queue, point.X, point.Y - 1);
+            }
+
+            return component;
+        }
+
+        private static void EnqueueArtifactNeighbor(Image<Rgba32> image, bool[,] mask, bool[,] visited, Queue<Point> queue, int x, int y)
+        {
+            if (x <= 0 || y <= 0 || x >= image.Width - 1 || y >= image.Height - 1 || visited[x, y] || mask[x, y])
+            {
+                return;
+            }
+
+            visited[x, y] = true;
+            queue.Enqueue(new Point(x, y));
+        }
+
+        private static bool IsBackgroundArtifactComponent(bool[,] mask, IReadOnlyList<Point> component)
+        {
+            if (component.Count == 0)
+            {
+                return false;
+            }
+
+            var boundaryTouches = 0;
+            var boundaryChecks = 0;
+            foreach (var point in component)
+            {
+                for (var offsetY = -1; offsetY <= 1; offsetY++)
+                {
+                    for (var offsetX = -1; offsetX <= 1; offsetX++)
+                    {
+                        if (offsetX == 0 && offsetY == 0)
+                        {
+                            continue;
+                        }
+
+                        var x = point.X + offsetX;
+                        var y = point.Y + offsetY;
+                        if (x < 0 || y < 0 || x >= mask.GetLength(0) || y >= mask.GetLength(1))
+                        {
+                            continue;
+                        }
+
+                        boundaryChecks++;
+                        if (mask[x, y])
+                        {
+                            boundaryTouches++;
+                        }
+                    }
+                }
+            }
+
+            return boundaryChecks > 0 && boundaryTouches >= Math.Max(8, component.Count / 2);
+        }
+
+        private static int CountMaskedNeighbors(bool[,] mask, int x, int y)
+        {
+            var count = 0;
+            for (var offsetY = -1; offsetY <= 1; offsetY++)
+            {
+                for (var offsetX = -1; offsetX <= 1; offsetX++)
+                {
+                    if (offsetX == 0 && offsetY == 0)
+                    {
+                        continue;
+                    }
+
+                    if (mask[x + offsetX, y + offsetY])
+                    {
+                        count++;
+                    }
+                }
+            }
+
+            return count;
+        }
+
+        private static double ResolveBackgroundReplacementStrength(Rgba32 pixel, Rgba32 backgroundColor, ProcessingOptions options)
+        {
+            var tolerance = Math.Max(0, Math.Min(255, options.BackgroundTolerance));
+            var feather = Math.Max(0, Math.Min(100, options.BackgroundFeather));
+            var softRange = Math.Max(1, feather);
+            var distance = ColorDistance(pixel, backgroundColor);
+
+            if (distance <= tolerance)
+            {
+                return 1d;
+            }
+
+            if (distance > tolerance + softRange)
+            {
+                return 0d;
+            }
+
+            return 1d - (distance - tolerance) / softRange;
+        }
+
+        private static Rgba32 BlendTransparentPixel(Rgba32 pixel, Rgba32 backgroundColor)
+        {
+            var alpha = pixel.A / 255d;
+            return new Rgba32(
+                (byte)Math.Round(pixel.R * alpha + backgroundColor.R * (1d - alpha)),
+                (byte)Math.Round(pixel.G * alpha + backgroundColor.G * (1d - alpha)),
+                (byte)Math.Round(pixel.B * alpha + backgroundColor.B * (1d - alpha)),
+                255);
+        }
+
+        private static Rgba32 BlendOpaquePixel(Rgba32 pixel, Rgba32 backgroundColor, double strength)
+        {
+            var clamped = Math.Max(0d, Math.Min(1d, strength));
+            return new Rgba32(
+                (byte)Math.Round(pixel.R * (1d - clamped) + backgroundColor.R * clamped),
+                (byte)Math.Round(pixel.G * (1d - clamped) + backgroundColor.G * clamped),
+                (byte)Math.Round(pixel.B * (1d - clamped) + backgroundColor.B * clamped),
+                255);
+        }
+
+        private static Rgba32 EstimateIdPhotoBackgroundColor(Image<Rgba32> image)
+        {
+            var samples = CollectIdPhotoBackgroundSamples(image).ToList();
+            if (!samples.Any())
+            {
+                return EstimateBackgroundColor(image);
+            }
+
+            var candidates = samples.Where(pixel => GetLuminance(pixel) >= 24).ToList();
+            if (!candidates.Any())
+            {
+                candidates = samples;
+            }
+
+            var dominantBucket = candidates
+                .GroupBy(pixel => CreateColorBucket(pixel, 24))
+                .OrderByDescending(group => group.Count())
+                .First();
+
+            long red = 0;
+            long green = 0;
+            long blue = 0;
+            long count = 0;
+
+            foreach (var pixel in dominantBucket)
+            {
+                red += pixel.R;
+                green += pixel.G;
+                blue += pixel.B;
+                count++;
+            }
+
+            return count == 0
+                ? EstimateBackgroundColor(image)
+                : new Rgba32((byte)(red / count), (byte)(green / count), (byte)(blue / count), 255);
+        }
+
+        private static IEnumerable<Rgba32> CollectIdPhotoBackgroundSamples(Image<Rgba32> image)
+        {
+            if (image.Width <= 0 || image.Height <= 0)
+            {
+                yield break;
+            }
+
+            var minSide = Math.Min(image.Width, image.Height);
+            var insets = new[]
+            {
+                Math.Max(1, minSide / 24),
+                Math.Max(1, minSide / 12),
+                Math.Max(1, minSide / 8)
+            }
+            .Distinct()
+            .ToArray();
+            var step = Math.Max(1, minSide / 80);
+
+            foreach (var inset in insets)
+            {
+                var left = Math.Min(inset, image.Width - 1);
+                var top = Math.Min(inset, image.Height - 1);
+                var right = Math.Max(left, image.Width - 1 - inset);
+                var bottom = Math.Max(top, image.Height - 1 - inset);
+
+                for (var x = left; x <= right; x += step)
+                {
+                    yield return image[x, top];
+                    yield return image[x, bottom];
+                }
+
+                for (var y = top; y <= bottom; y += step)
+                {
+                    yield return image[left, y];
+                    yield return image[right, y];
+                }
+            }
+        }
+
+        private static int CreateColorBucket(Rgba32 pixel, int bucketSize)
+        {
+            var size = Math.Max(1, bucketSize);
+            return pixel.R / size << 16 | pixel.G / size << 8 | pixel.B / size;
+        }
+
+        private static double GetLuminance(Rgba32 pixel)
+        {
+            return pixel.R * 0.299d + pixel.G * 0.587d + pixel.B * 0.114d;
         }
 
         private static Rgba32 EstimateBackgroundColor(Image<Rgba32> image)
@@ -1725,12 +2151,6 @@ namespace Photo_zip.Services
             return Math.Sqrt(red * red + green * green + blue * blue);
         }
 
-        private static byte BlendChannel(byte foreground, byte background, double backgroundWeight)
-        {
-            var value = foreground * (1d - backgroundWeight) + background * backgroundWeight;
-            return (byte)Math.Max(0, Math.Min(255, Math.Round(value)));
-        }
-
         private static Rgba32 ParseHexColor(string value)
         {
             var text = (value ?? string.Empty).Trim();
@@ -1741,7 +2161,7 @@ namespace Photo_zip.Services
 
             if (text.Length != 6 || !int.TryParse(text, NumberStyles.HexNumber, CultureInfo.InvariantCulture, out var number))
             {
-                throw new ArgumentException("背景替换色请使用 #RRGGBB 格式。");
+                throw new ArgumentException("颜色请使用 #RRGGBB 格式。");
             }
 
             return new Rgba32((byte)((number >> 16) & 255), (byte)((number >> 8) & 255), (byte)(number & 255), 255);

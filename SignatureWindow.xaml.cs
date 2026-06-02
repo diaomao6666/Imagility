@@ -1,3 +1,4 @@
+using Microsoft.Win32;
 using System;
 using System.Collections.Generic;
 using System.Globalization;
@@ -227,12 +228,52 @@ namespace Photo_zip
                 return;
             }
 
-            Directory.CreateDirectory(SignatureDirectory);
-            var path = System.IO.Path.Combine(SignatureDirectory, "signature-" + DateTime.Now.ToString("yyyyMMdd-HHmmss", CultureInfo.InvariantCulture) + ".png");
-            SaveSignaturePng(path);
-            SavedSignaturePath = path;
-            DialogResult = true;
-            Close();
+            var path = SelectSavePath();
+            if (string.IsNullOrWhiteSpace(path))
+            {
+                return;
+            }
+
+            try
+            {
+                SaveSignaturePng(path);
+                SavedSignaturePath = path;
+                DialogResult = true;
+                Close();
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show("签名保存失败，请确认保存位置可写。\n\n" + ex.Message, "保存失败", MessageBoxButton.OK, MessageBoxImage.Warning);
+            }
+        }
+
+        private string SelectSavePath()
+        {
+            try
+            {
+                Directory.CreateDirectory(SignatureDirectory);
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show("默认签名目录不可用，请重新选择保存位置。\n\n" + ex.Message, "提示", MessageBoxButton.OK, MessageBoxImage.Information);
+            }
+
+            var dialog = new SaveFileDialog
+            {
+                Title = "保存签名 PNG",
+                Filter = "PNG 图片 (*.png)|*.png",
+                DefaultExt = ".png",
+                AddExtension = true,
+                OverwritePrompt = true,
+                FileName = "signature-" + DateTime.Now.ToString("yyyyMMdd-HHmmss", CultureInfo.InvariantCulture) + ".png"
+            };
+
+            if (Directory.Exists(SignatureDirectory))
+            {
+                dialog.InitialDirectory = SignatureDirectory;
+            }
+
+            return dialog.ShowDialog(this) == true ? dialog.FileName : null;
         }
 
         private void Cancel_Click(object sender, RoutedEventArgs e)
